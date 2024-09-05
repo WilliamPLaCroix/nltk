@@ -10,6 +10,7 @@
 According to Chen & Goodman 1995 these should work with both Backoff and
 Interpolation.
 """
+from collections import defaultdict
 from operator import methodcaller
 
 from nltk.lm.api import Smoothing
@@ -125,3 +126,78 @@ class KneserNey(Smoothing):
             higher_order_ngrams_with_word_count += int(counts[word] > 0)
             total += _count_values_gt_zero(counts)
         return higher_order_ngrams_with_word_count, total
+
+
+class KneserNeyWithLookup(Smoothing):
+    """Kneser-Ney Smoothing with lookup.
+
+    This is an extension of the KneserNey smoothing class that uses
+    lookup tables to speed up the computation of unigram scores and alpha/gamma
+    values. This is useful for large corpora or higher order models.
+
+    The main downside is that this requires additional memory to store the lookup
+    tables, and takes a long, potentially memory-intensive, time to generate them
+    during the first text generation. Subsequent generations are nearly instant.
+
+    """
+
+    def __init__(self, vocabulary, counter, order, discount=0.1, **kwargs):
+        super().__init__(vocabulary, counter, **kwargs)
+        self.discount = discount
+        self._order = order
+        self.continuation_counts = defaultdict(dict)
+        self.unigram_counts = defaultdict(int)
+
+    def unigram_score(self, word):
+        if len(self.unigram_counts) == 0:
+            self._generate_continuation_counts()
+        word_continuation_count, total_count = self.unigram_counts[word]
+        return word_continuation_count / total_count
+
+    def alpha_gamma(self, word, context):
+        prefix_counts = self.counts[context]
+        word_continuation_count, total_count = (
+            (prefix_counts[word], prefix_counts.N())
+            if len(context) + 1 == self._order
+            else self.continuation_counts[word][context]
+        )
+        alpha = max(word_continuation_count - self.discount, 0.0) / total_count
+        gamma = self.discount * _count_values_gt_zero(prefix_counts) / total_count
+        return alpha, gamma
+
+    def _continuation_counts(self, word, context=tuple()):
+        """Count continuations that end with context and word.
+
+        Continuations track unique ngram "types", regardless of how many
+        instances were observed for each "type".
+        This is different than raw ngram counts which track number of instances.
+        """
+        higher_order_ngrams_with_context = (
+            counts
+            for prefix_ngram, counts in self.counts[len(context) + 2].items()
+            if prefix_ngram[1:] == context
+        )
+        higher_order_ngrams_with_word_count, total = 0, 0
+        for counts in higher_order_ngrams_with_context:
+            higher_order_ngrams_with_word_count += int(counts[word] > 0)
+            total += _count_values_gt_zero(counts)
+        return higher_order_ngrams_with_word_count, total
+
+    def _generate_continuation_counts(self):
+        """Generate counts of continuations for each word in the vocabulary.
+        This is a helper method for `unigram_score` and `alpha_gamma` that
+        generates counts of continuations for each word in the vocabulary based
+        on the counts in fitted corpus.
+
+        This is called during first generation, not during initialization,
+        so lm.fit() will still run quickly, but this can take a long time for larger
+        corpora or higher order models.
+        """
+        for order in range(2, self._order + 2):
+            for context, counts in self.counts[order].items():
+                for word in counts:
+                    self.continuation_counts[word][context] = self._continuation_counts(
+                        word, context
+                    )
+        for word, counts in self.counts[1].items():
+            self.unigram_counts[word] = self._continuation_counts(word)

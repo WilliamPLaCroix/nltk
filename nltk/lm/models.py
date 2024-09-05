@@ -8,7 +8,12 @@
 """Language Models"""
 
 from nltk.lm.api import LanguageModel, Smoothing
-from nltk.lm.smoothing import AbsoluteDiscounting, KneserNey, WittenBell
+from nltk.lm.smoothing import (
+    AbsoluteDiscounting,
+    KneserNey,
+    KneserNeyWithLookup,
+    WittenBell,
+)
 
 
 class MLE(LanguageModel):
@@ -138,4 +143,21 @@ class KneserNeyInterpolated(InterpolatedLanguageModel):
             )
         super().__init__(
             KneserNey, order, params={"discount": discount, "order": order}, **kwargs
+        )
+
+
+class KneserNeyWithLookupInterpolated(InterpolatedLanguageModel):
+    """Interpolated version of Kneser-Ney smoothing with lookup to speed up generation
+    at the cost of increased fit time and memory."""
+
+    def __init__(self, order, discount=0.1, **kwargs):
+        if not (0 <= discount <= 1):
+            raise ValueError(
+                "Discount must be between 0 and 1 for probabilities to sum to unity."
+            )
+        super().__init__(
+            KneserNeyWithLookup,
+            order,
+            params={"discount": discount, "order": order},
+            **kwargs
         )
